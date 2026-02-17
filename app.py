@@ -1,4 +1,4 @@
-%writefile app.py
+
 import streamlit as st
 import joblib
 import os
@@ -46,4 +46,5 @@ else:
                 st.write(f"Confidence: {probability[1]*100:.2f}%")
             else:
                 st.success(f"✅ **SAFE MESSAGE (HAM)**")
+
                         st.write(f"Confidence: {probability[0]*100:.2f}%")
