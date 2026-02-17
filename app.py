@@ -2,71 +2,75 @@ import streamlit as st
 import pandas as pd
 import os
 import joblib
+import re
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from scipy.sparse import hstack
 
 st.set_page_config(page_title="Spam Detection App", page_icon="📩")
 
 MODEL_FILE = "model.pkl"
 VECTORIZER_FILE = "vectorizer.pkl"
+SCALER_FILE = "scaler.pkl"
 DATA_FILE = "dataset.csv"
 
 # ------------------------------
-# Train Model (Only if Needed)
+# Custom Feature Engineering
+# ------------------------------
+def extra_features(text_series):
+    url_feature = text_series.apply(lambda x: 1 if re.search(r'http|www|\.com|\.net', x.lower()) else 0)
+    length_feature = text_series.apply(len)
+    urgent_words = text_series.apply(lambda x: 1 if "urgent" in x.lower() or "verify" in x.lower() else 0)
+
+    return pd.DataFrame({
+        "url": url_feature,
+        "length": length_feature,
+        "urgent_flag": urgent_words
+    })
+
+# ------------------------------
+# Train Model
 # ------------------------------
 @st.cache_resource
 def train_model():
-    if not os.path.exists(DATA_FILE):
-        st.error("Dataset file not found. Please upload dataset.csv")
-        st.stop()
-
     df = pd.read_csv(DATA_FILE)
 
-    # Validate dataset structure
-    if "target" not in df.columns or "text" not in df.columns:
-        st.error("Dataset must contain 'target' and 'text' columns.")
-        st.stop()
-
-    # Convert labels safely
     df["label"] = df["target"].map({"ham": 0, "spam": 1})
 
-    if df["label"].isnull().any():
-        st.error("Unexpected label values found in dataset.")
-        st.stop()
+    vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1,2))
+    X_text = vectorizer.fit_transform(df["text"])
 
-    vectorizer = TfidfVectorizer(
-        stop_words="english",
-        ngram_range=(1, 2),
-        lowercase=True
-    )
+    X_extra = extra_features(df["text"])
+    scaler = StandardScaler()
+    X_extra_scaled = scaler.fit_transform(X_extra)
 
-    X = vectorizer.fit_transform(df["text"])
-    y = df["label"]
+    X_combined = hstack([X_text, X_extra_scaled])
 
-    model = LogisticRegression(max_iter=1000)
-    model.fit(X, y)
+    model = LogisticRegression(max_iter=2000)
+    model.fit(X_combined, df["label"])
 
     joblib.dump(model, MODEL_FILE)
     joblib.dump(vectorizer, VECTORIZER_FILE)
+    joblib.dump(scaler, SCALER_FILE)
 
-    return model, vectorizer
-
+    return model, vectorizer, scaler
 
 # ------------------------------
 # Load or Train
 # ------------------------------
-if os.path.exists(MODEL_FILE) and os.path.exists(VECTORIZER_FILE):
+if os.path.exists(MODEL_FILE):
     model = joblib.load(MODEL_FILE)
     vectorizer = joblib.load(VECTORIZER_FILE)
+    scaler = joblib.load(SCALER_FILE)
 else:
-    model, vectorizer = train_model()
-
+    model, vectorizer, scaler = train_model()
 
 # ------------------------------
 # UI
 # ------------------------------
-st.title("📩 Spam Detection App")
-st.write("Enter a message to check if it is Spam or Not Spam.")
+st.title("📩 Advanced Spam Detection")
+st.write("Now with phishing-aware detection.")
 
 user_input = st.text_area("Enter your message here:")
 
@@ -74,13 +78,18 @@ if st.button("Predict"):
     if user_input.strip() == "":
         st.warning("Please enter a message.")
     else:
-        transformed = vectorizer.transform([user_input])
-        prediction = model.predict(transformed)[0]
-        probability = model.predict_proba(transformed)[0]
+        text_vec = vectorizer.transform([user_input])
+        extra = extra_features(pd.Series([user_input]))
+        extra_scaled = scaler.transform(extra)
+
+        final_input = hstack([text_vec, extra_scaled])
+
+        prediction = model.predict(final_input)[0]
+        probability = model.predict_proba(final_input)[0]
 
         if prediction == 1:
-            st.error("🚨 This message is SPAM.")
+            st.error("🚨 SPAM DETECTED")
             st.write(f"Confidence: {probability[1]*100:.2f}%")
         else:
-            st.success("✅ This message is NOT Spam.")
+            st.success("✅ SAFE MESSAGE")
             st.write(f"Confidence: {probability[0]*100:.2f}%")
