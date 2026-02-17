@@ -1,50 +1,69 @@
-
 import streamlit as st
-import joblib
+import pandas as pd
+import pickle
 import os
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
 
-# 1. Page Configuration
-st.set_page_config(page_title="Spam Detective", page_icon="🕵️")
+st.set_page_config(page_title="Spam Detector", page_icon="📩")
 
-# 2. Load the Saved Model
-@st.cache_resource
-def load_model():
-    if not os.path.exists('spam_model.pkl'):
-        return None, None
-    model = joblib.load('spam_model.pkl')
-    vectorizer = joblib.load('tfidf_vectorizer.pkl')
+st.title("📩 Spam Detection App")
+st.write("Enter a message to check if it is Spam or Not Spam.")
+
+# -----------------------------
+# Train Model If Not Exists
+# -----------------------------
+def train_and_save_model():
+    df = pd.read_csv(
+        "https://raw.githubusercontent.com/justmarkham/pycon-2016-tutorial/master/data/sms.tsv",
+        sep="\t",
+        header=None,
+        names=["label", "message"],
+    )
+
+    df["label"] = df["label"].map({"ham": 0, "spam": 1})
+
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform(df["message"])
+    y = df["label"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+    model = MultinomialNB()
+    model.fit(X_train, y_train)
+
+    pickle.dump(model, open("model.pkl", "wb"))
+    pickle.dump(vectorizer, open("vectorizer.pkl", "wb"))
+
     return model, vectorizer
 
-model, vectorizer = load_model()
 
-# 3. The User Interface
-st.title("🕵️ SMS/Email Spam Classifier")
-st.write("Enter a message below to check if it's **Spam** or **Safe (Ham)**.")
-
-if model is None:
-    st.error("Model not found! Please run 'train_model.py' first to generate the model files.")
+# -----------------------------
+# Load or Train
+# -----------------------------
+if not os.path.exists("model.pkl") or not os.path.exists("vectorizer.pkl"):
+    model, vectorizer = train_and_save_model()
 else:
-    # Text Input
-    user_input = st.text_area("Message Content:", height=150, placeholder="Type your message here... e.g., 'You won a free lottery!'")
+    model = pickle.load(open("model.pkl", "rb"))
+    vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
 
-    if st.button("Analyze Message"):
-        if user_input.strip() == "":
-            st.warning("Please enter some text first.")
+
+# -----------------------------
+# User Input
+# -----------------------------
+message = st.text_area("Enter your message here:")
+
+if st.button("Predict"):
+    if message.strip() == "":
+        st.warning("Please enter a message.")
+    else:
+        transformed = vectorizer.transform([message])
+        prediction = model.predict(transformed)[0]
+
+        if prediction == 1:
+            st.error("🚨 This message is SPAM!")
         else:
-            # 4. Prediction Logic
-            vec_input = vectorizer.transform([user_input])
-
-            # Predict
-            prediction = model.predict(vec_input)[0]
-            probability = model.predict_proba(vec_input)[0]
-
-            # 5. Display Results
-            st.subheader("Analysis Result:")
-
-            if prediction == 1:
-                st.error(f"🚨 **SPAM DETECTED**")
-                st.write(f"Confidence: {probability[1]*100:.2f}%")
-            else:
-                st.success(f"✅ **SAFE MESSAGE (HAM)**")
-
-                        st.write(f"Confidence: {probability[0]*100:.2f}%")
+            st.success("✅ This message is NOT Spam.")
