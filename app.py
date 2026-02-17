@@ -1,69 +1,86 @@
 import streamlit as st
 import pandas as pd
-import pickle
 import os
+import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
-from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
 
-st.set_page_config(page_title="Spam Detector", page_icon="📩")
+st.set_page_config(page_title="Spam Detection App", page_icon="📩")
 
-st.title("📩 Spam Detection App")
-st.write("Enter a message to check if it is Spam or Not Spam.")
+MODEL_FILE = "model.pkl"
+VECTORIZER_FILE = "vectorizer.pkl"
+DATA_FILE = "dataset.csv"
 
-# -----------------------------
-# Train Model If Not Exists
-# -----------------------------
-def train_and_save_model():
-    df = pd.read_csv(
-        "https://raw.githubusercontent.com/justmarkham/pycon-2016-tutorial/master/data/sms.tsv",
-        sep="\t",
-        header=None,
-        names=["label", "message"],
+# ------------------------------
+# Train Model (Only if Needed)
+# ------------------------------
+@st.cache_resource
+def train_model():
+    if not os.path.exists(DATA_FILE):
+        st.error("Dataset file not found. Please upload dataset.csv")
+        st.stop()
+
+    df = pd.read_csv(DATA_FILE)
+
+    # Validate dataset structure
+    if "target" not in df.columns or "text" not in df.columns:
+        st.error("Dataset must contain 'target' and 'text' columns.")
+        st.stop()
+
+    # Convert labels safely
+    df["label"] = df["target"].map({"ham": 0, "spam": 1})
+
+    if df["label"].isnull().any():
+        st.error("Unexpected label values found in dataset.")
+        st.stop()
+
+    vectorizer = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        lowercase=True
     )
 
-    df["label"] = df["label"].map({"ham": 0, "spam": 1})
-
-    vectorizer = TfidfVectorizer()
-    X = vectorizer.fit_transform(df["message"])
+    X = vectorizer.fit_transform(df["text"])
     y = df["label"]
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X, y)
 
-    model = MultinomialNB()
-    model.fit(X_train, y_train)
-
-    pickle.dump(model, open("model.pkl", "wb"))
-    pickle.dump(vectorizer, open("vectorizer.pkl", "wb"))
+    joblib.dump(model, MODEL_FILE)
+    joblib.dump(vectorizer, VECTORIZER_FILE)
 
     return model, vectorizer
 
 
-# -----------------------------
+# ------------------------------
 # Load or Train
-# -----------------------------
-if not os.path.exists("model.pkl") or not os.path.exists("vectorizer.pkl"):
-    model, vectorizer = train_and_save_model()
+# ------------------------------
+if os.path.exists(MODEL_FILE) and os.path.exists(VECTORIZER_FILE):
+    model = joblib.load(MODEL_FILE)
+    vectorizer = joblib.load(VECTORIZER_FILE)
 else:
-    model = pickle.load(open("model.pkl", "rb"))
-    vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
+    model, vectorizer = train_model()
 
 
-# -----------------------------
-# User Input
-# -----------------------------
-message = st.text_area("Enter your message here:")
+# ------------------------------
+# UI
+# ------------------------------
+st.title("📩 Spam Detection App")
+st.write("Enter a message to check if it is Spam or Not Spam.")
+
+user_input = st.text_area("Enter your message here:")
 
 if st.button("Predict"):
-    if message.strip() == "":
+    if user_input.strip() == "":
         st.warning("Please enter a message.")
     else:
-        transformed = vectorizer.transform([message])
+        transformed = vectorizer.transform([user_input])
         prediction = model.predict(transformed)[0]
+        probability = model.predict_proba(transformed)[0]
 
         if prediction == 1:
-            st.error("🚨 This message is SPAM!")
+            st.error("🚨 This message is SPAM.")
+            st.write(f"Confidence: {probability[1]*100:.2f}%")
         else:
             st.success("✅ This message is NOT Spam.")
+            st.write(f"Confidence: {probability[0]*100:.2f}%")
